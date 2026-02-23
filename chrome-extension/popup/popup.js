@@ -3,7 +3,7 @@ let currentChart = null;
 const LOCAL_API_BASE_URL = "http://localhost:8080";
 const DEFAULT_API_BASE_URL = "https://gitsense-ooly.onrender.com";
 const API_BASE_CANDIDATES = [LOCAL_API_BASE_URL, DEFAULT_API_BASE_URL];
-let API_BASE_URL = "";
+let API_BASE_URL = DEFAULT_API_BASE_URL;
 const UI_THEME = {
     primary: "#1f7a8c",
     primarySoft: "rgba(31, 122, 140, 0.16)",
@@ -22,28 +22,32 @@ document.addEventListener('DOMContentLoaded', () => {
     // Check if user is already authenticated
     chrome.storage.local.get(['authToken', 'selectedRepo', 'apiBaseUrl'], (result) => {
         console.log("📦 Storage result:", result);
+        const completeInit = () => {
+            if (result.authToken) {
+                console.log("✅ Auth token found");
+                authToken = result.authToken;
+                hideAuthShowMain();
+                showLogoutButton();
+
+                // Load repositories and restore selection after loading
+                loadRepositories(result.selectedRepo);
+            } else {
+                console.log("⚠️ No auth token found");
+            }
+        };
+
         resolveApiBaseURL(result.apiBaseUrl)
             .then((resolvedURL) => {
                 API_BASE_URL = resolvedURL;
                 chrome.storage.local.set({ apiBaseUrl: resolvedURL });
                 console.log("🌐 Using API base URL:", API_BASE_URL);
+                completeInit();
             })
             .catch(() => {
                 API_BASE_URL = result.apiBaseUrl || DEFAULT_API_BASE_URL;
                 console.warn("⚠️ Could not validate API base URL, falling back to:", API_BASE_URL);
+                completeInit();
             });
-
-        if (result.authToken) {
-            console.log("✅ Auth token found");
-            authToken = result.authToken;
-            hideAuthShowMain();
-            showLogoutButton();
-
-            // Load repositories and restore selection after loading
-            loadRepositories(result.selectedRepo);
-        } else {
-            console.log("⚠️ No auth token found");
-        }
     });
 });
 

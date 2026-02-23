@@ -22,7 +22,10 @@
 
 body {
   width: 420px;
-  min-height: 500px;
+  min-height: 0;
+  height: auto;
+  max-height: 600px;
+  overflow-y: auto;
   font-family: var(--font-sans);
   color: var(--ink);
   background:
