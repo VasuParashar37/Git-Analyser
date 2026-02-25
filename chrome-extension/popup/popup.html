@@ -89,6 +89,43 @@
         </ul>
       </div>
 
+      <!-- Notification Settings -->
+      <div id="notifSettingsSection" class="section">
+        <div class="section-header">
+          <h4>Notification Settings</h4>
+        </div>
+        <div class="notif-toggles">
+          <label class="notif-toggle">
+            <input type="checkbox" id="notifNewCommits" checked>
+            <span>New commits detected</span>
+          </label>
+          <label class="notif-toggle">
+            <input type="checkbox" id="notifActivitySpike" checked>
+            <span>Activity spike</span>
+          </label>
+          <label class="notif-toggle">
+            <input type="checkbox" id="notifRepoInactive" checked>
+            <span>Repo becomes inactive</span>
+          </label>
+          <label class="notif-toggle">
+            <input type="checkbox" id="notifWatchedFile" checked>
+            <span>Watched file updated</span>
+          </label>
+        </div>
+        <div class="watched-files-section">
+          <div class="section-header">
+            <h4>Watched Files</h4>
+          </div>
+          <div class="watched-file-input-group">
+            <input type="text" id="watchedFileInput" placeholder="e.g., README.md or src/auth" class="text-input">
+            <button id="addWatchedFile" class="btn-small">+ Add</button>
+          </div>
+          <ul id="watchedFilesList" class="watched-files-list">
+            <!-- populated dynamically -->
+          </ul>
+        </div>
+      </div>
+
     </div>
 
     <!-- Status Messages -->

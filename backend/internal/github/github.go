@@ -29,7 +29,7 @@ type GitHubFile struct {
 // ----------------------------
 // SYNC FROM GITHUB
 // ----------------------------
-func SyncFromGitHub(owner, repo, token string) error {
+func SyncFromGitHub(owner, repo, token string) ([]string, error) {
 
 	// Limit commits to avoid timeout
 	url := fmt.Sprintf(
@@ -39,22 +39,25 @@ func SyncFromGitHub(owner, repo, token string) error {
 
 	req, err := gitsense.CreateGitHubRequest("GET", url, token)
 	if err != nil {
-		return fmt.Errorf("failed to create commit request: %w", err)
+		return nil, fmt.Errorf("failed to create commit request: %w", err)
 	}
 
 	client := gitsense.CreateHTTPClient(gitsense.GitHubAPITimeout)
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	var commits []GitHubCommit
 	if err := json.NewDecoder(resp.Body).Decode(&commits); err != nil {
-		return err
+		return nil, err
 	}
 
 	fmt.Printf("📊 Found %d commits\n", len(commits))
+
+	// Track unique filenames across all processed commits
+	updatedFilesMap := make(map[string]bool)
 
 	// ----------------------------
 	// PROCESS EACH COMMIT
@@ -113,6 +116,7 @@ func SyncFromGitHub(owner, repo, token string) error {
 		// UPDATE FILE ACTIVITY
 		// ----------------------------
 		for _, f := range detail.Files {
+			updatedFilesMap[f.Filename] = true
 
 			_, err := db.DB.Exec(`
 				INSERT INTO file_activity
@@ -138,7 +142,11 @@ func SyncFromGitHub(owner, repo, token string) error {
 		}
 	}
 
-	return nil
+	updatedFiles := make([]string, 0, len(updatedFilesMap))
+	for fname := range updatedFilesMap {
+		updatedFiles = append(updatedFiles, fname)
+	}
+	return updatedFiles, nil
 }
 
 // ----------------------------

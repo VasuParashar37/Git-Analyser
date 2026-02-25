@@ -14,6 +14,8 @@ func HealthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("GitSense backend running 🚀"))
 }
 
+//Dummy Commit for testing
+
 func GetProjectSummary(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.DB.Query(`SELECT last_modified FROM file_activity`)
 	if err != nil {

@@ -48,19 +48,71 @@ async function autoSync() {
       }
     });
 
-    const msg = await response.text();
+    const contentType = response.headers.get("Content-Type") || "";
 
-    // Only notify if significant activity detected
-    if (msg.includes("🔔")) {
-      chrome.notifications.create({
-        type: "basic",
-        iconUrl: "icon.png",
-        title: "GitSense – New Commit",
-        message: msg
-      });
-    } else {
-      console.log("✅ Auto-sync completed (no significant activity)");
+    // Handle legacy plain-text responses (backward compatibility)
+    if (!contentType.includes("application/json")) {
+      const msg = await response.text();
+      if (msg.includes("🔔")) {
+        chrome.notifications.create({
+          type: "basic",
+          iconUrl: "icon.png",
+          title: "GitSense – New Commit",
+          message: msg
+        });
+      } else {
+        console.log("✅ Auto-sync completed (legacy response, no activity)");
+      }
+      return;
     }
+
+    // Parse structured JSON response
+    const syncData = await response.json();
+
+    if (!syncData || !syncData.notifications) {
+      console.log("✅ Auto-sync completed (no notifications)");
+      return;
+    }
+
+    // Load notification preferences and watched files
+    const prefs = await chrome.storage.local.get(['notificationPrefs', 'watchedFiles']);
+    const notifPrefs = prefs.notificationPrefs || {
+      new_commits: true,
+      activity_spike: true,
+      repo_inactive: true,
+      watched_file: true
+    };
+
+    // Fire backend-generated notifications based on user preferences
+    for (const notif of syncData.notifications) {
+      if (notifPrefs[notif.type]) {
+        chrome.notifications.create({
+          type: "basic",
+          iconUrl: "icon.png",
+          title: notif.title,
+          message: notif.message
+        });
+      }
+    }
+
+    // Client-side watched file matching
+    if (notifPrefs.watched_file && syncData.updated_files && prefs.watchedFiles) {
+      const watchedFiles = prefs.watchedFiles || [];
+      const matchedFiles = syncData.updated_files.filter(f =>
+        watchedFiles.some(watched => f.includes(watched))
+      );
+
+      if (matchedFiles.length > 0) {
+        chrome.notifications.create({
+          type: "basic",
+          iconUrl: "icon.png",
+          title: "Watched File Updated",
+          message: matchedFiles.slice(0, 3).join(", ") + (matchedFiles.length > 3 ? "..." : "")
+        });
+      }
+    }
+
+    console.log(`✅ Auto-sync completed: ${syncData.new_commits} new commits, score: ${syncData.activity.current_score}`);
   } catch (error) {
     console.error("❌ Auto-sync failed:", error);
   }

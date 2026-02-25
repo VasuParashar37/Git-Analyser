@@ -19,6 +19,27 @@ const UI_THEME = {
 document.addEventListener('DOMContentLoaded', () => {
     console.log("🔍 Popup loaded, checking storage...");
 
+    // Initialize notification settings UI
+    initNotificationSettings();
+
+    // Notification preference toggle handlers
+    ["notifNewCommits", "notifActivitySpike", "notifRepoInactive", "notifWatchedFile"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("change", saveNotificationPrefs);
+    });
+
+    // Watched file add button
+    const addWatchedBtn = document.getElementById("addWatchedFile");
+    if (addWatchedBtn) addWatchedBtn.addEventListener("click", addWatchedFile);
+
+    // Enter key in watched file input
+    const watchedInput = document.getElementById("watchedFileInput");
+    if (watchedInput) {
+        watchedInput.addEventListener("keypress", (e) => {
+            if (e.key === "Enter") addWatchedFile();
+        });
+    }
+
     // Check if user is already authenticated
     chrome.storage.local.get(['authToken', 'selectedRepo', 'apiBaseUrl'], (result) => {
         console.log("📦 Storage result:", result);
@@ -269,31 +290,85 @@ document.getElementById("sync").addEventListener("click", () => {
 
     showLoading("Syncing repository...");
 
-    // fetch(`https://gitsense-ooly.onrender.com/sync?owner=${owner}&repo=${repo}`, {
     fetch(`${API_BASE_URL}/sync?owner=${owner}&repo=${repo}`, {
         headers: {
             "Authorization": `Bearer ${authToken}`
         }
     })
-        .then(res => res.text())
-        .then(msg => {
-            if (msg.includes("🔔")) {
-                showStatus("🔔 Significant activity detected!", "info");
-
-                chrome.notifications.create({
-                    type: "basic",
-                    iconUrl: "icon.png",
-                    title: "GitSense Alert",
-                    message: "Significant repo activity detected!"
-                });
+        .then(res => {
+            const contentType = res.headers.get("Content-Type") || "";
+            if (contentType.includes("application/json")) {
+                return res.json();
+            }
+            // Backward compatibility: plain-text response
+            return res.text().then(text => ({ _legacyText: text }));
+        })
+        .then(data => {
+            if (data._legacyText) {
+                // Legacy plain-text handling
+                if (data._legacyText.includes("🔔")) {
+                    showStatus("🔔 Significant activity detected!", "info");
+                } else {
+                    showStatus("✅ Sync completed successfully", "success");
+                }
             } else {
-                showStatus("✅ Sync completed successfully", "success");
+                // Structured JSON response
+                if (data.new_commits > 0) {
+                    showStatus(`🔔 ${data.new_commits} new commit(s) synced. Score: ${data.activity.current_score}`, "info");
+                } else {
+                    showStatus(`✅ Sync completed. Score: ${data.activity.current_score}`, "success");
+                }
+
+                // Update activity score directly from sync response
+                const scoreEl = document.getElementById("activityScore");
+                if (scoreEl && data.activity) {
+                    scoreEl.textContent = data.activity.current_score;
+                }
+
+                // Fire notifications based on user preferences
+                chrome.storage.local.get(['notificationPrefs', 'watchedFiles'], (result) => {
+                    const prefs = result.notificationPrefs || {
+                        new_commits: true,
+                        activity_spike: true,
+                        repo_inactive: true,
+                        watched_file: true
+                    };
+
+                    // Backend-generated notifications
+                    if (data.notifications) {
+                        data.notifications.forEach(n => {
+                            if (prefs[n.type]) {
+                                chrome.notifications.create({
+                                    type: "basic",
+                                    iconUrl: "icon.png",
+                                    title: n.title,
+                                    message: n.message
+                                });
+                            }
+                        });
+                    }
+
+                    // Client-side watched file matching
+                    const watchedFiles = result.watchedFiles || [];
+                    if (prefs.watched_file && data.updated_files && watchedFiles.length > 0) {
+                        const matched = data.updated_files.filter(f =>
+                            watchedFiles.some(w => f.includes(w))
+                        );
+                        if (matched.length > 0) {
+                            chrome.notifications.create({
+                                type: "basic",
+                                iconUrl: "icon.png",
+                                title: "Watched File Updated",
+                                message: matched.slice(0, 3).join(", ") + (matched.length > 3 ? "..." : "")
+                            });
+                        }
+                    }
+                });
             }
 
             loadHistory(repo);
             loadCommits(repo);
             updateLastSyncTime();
-
         })
         .catch(() => {
             showStatus("❌ Sync failed - please try again", "error");
@@ -530,3 +605,76 @@ function loadCommits(repo) {
         console.error("❌ Failed to load commits");
       });
   }
+
+// ----------------------------
+// NOTIFICATION SETTINGS
+// ----------------------------
+function initNotificationSettings() {
+    chrome.storage.local.get(['notificationPrefs', 'watchedFiles'], (result) => {
+        const prefs = result.notificationPrefs || {
+            new_commits: true,
+            activity_spike: true,
+            repo_inactive: true,
+            watched_file: true
+        };
+        const watchedFiles = result.watchedFiles || [];
+
+        document.getElementById("notifNewCommits").checked = prefs.new_commits;
+        document.getElementById("notifActivitySpike").checked = prefs.activity_spike;
+        document.getElementById("notifRepoInactive").checked = prefs.repo_inactive;
+        document.getElementById("notifWatchedFile").checked = prefs.watched_file;
+
+        renderWatchedFiles(watchedFiles);
+    });
+}
+
+function saveNotificationPrefs() {
+    const prefs = {
+        new_commits: document.getElementById("notifNewCommits").checked,
+        activity_spike: document.getElementById("notifActivitySpike").checked,
+        repo_inactive: document.getElementById("notifRepoInactive").checked,
+        watched_file: document.getElementById("notifWatchedFile").checked
+    };
+    chrome.storage.local.set({ notificationPrefs: prefs });
+}
+
+function renderWatchedFiles(files) {
+    const list = document.getElementById("watchedFilesList");
+    list.innerHTML = "";
+    files.forEach((file, index) => {
+        const li = document.createElement("li");
+        li.innerHTML = `
+            <span class="watched-file-name">${file}</span>
+            <button class="remove-watched-file" data-index="${index}">x</button>
+        `;
+        list.appendChild(li);
+    });
+
+    list.querySelectorAll(".remove-watched-file").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+            const idx = parseInt(e.target.dataset.index);
+            chrome.storage.local.get(['watchedFiles'], (result) => {
+                const files = result.watchedFiles || [];
+                files.splice(idx, 1);
+                chrome.storage.local.set({ watchedFiles: files });
+                renderWatchedFiles(files);
+            });
+        });
+    });
+}
+
+function addWatchedFile() {
+    const input = document.getElementById("watchedFileInput");
+    const fileName = input.value.trim();
+    if (!fileName) return;
+
+    chrome.storage.local.get(['watchedFiles'], (result) => {
+        const files = result.watchedFiles || [];
+        if (!files.includes(fileName)) {
+            files.push(fileName);
+            chrome.storage.local.set({ watchedFiles: files });
+            renderWatchedFiles(files);
+        }
+        input.value = "";
+    });
+}

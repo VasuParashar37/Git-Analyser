@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"gitsense/internal/auth"
 	"gitsense/internal/db"
 	githubapi "gitsense/internal/github"
+	"gitsense/internal/notifications"
 )
 
 func SyncHandler(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +62,8 @@ func SyncHandler(w http.ResponseWriter, r *http.Request) {
 	).Scan(&before)
 
 	// Fetch from GitHub
-	if err := githubapi.SyncFromGitHub(owner, repo, githubToken); err != nil {
+	updatedFiles, err := githubapi.SyncFromGitHub(owner, repo, githubToken)
+	if err != nil {
 		http.Error(w, "Sync failed", http.StatusInternalServerError)
 		return
 	}
@@ -79,6 +82,18 @@ func SyncHandler(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO user_repos (user_id, repo_name, last_synced)
 		VALUES (?, ?, CURRENT_TIMESTAMP)
 	`, userID, repo)
+
+	// Fetch previous snapshot score BEFORE creating a new one
+	previousScore := -1
+	var prevScoreFloat float64
+	if err := db.DB.QueryRow(`
+		SELECT activity_score FROM repo_snapshots
+		WHERE repo_name = ?
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, repo).Scan(&prevScoreFloat); err == nil {
+		previousScore = int(prevScoreFloat + 0.5)
+	}
 
 	// Snapshot handling
 	var snapshotCount int
@@ -126,14 +141,42 @@ func SyncHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Notify if new commits exist
-	if newCommits > 0 {
-		msg := fmt.Sprintf("🔔 %d new commit(s) detected", newCommits)
-		w.Write([]byte(msg))
-		return
+	// Fetch current snapshot score (the one just created or today's existing one)
+	currentScore := 0
+	var curScoreFloat float64
+	if err := db.DB.QueryRow(`
+		SELECT activity_score FROM repo_snapshots
+		WHERE repo_name = ?
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, repo).Scan(&curScoreFloat); err == nil {
+		currentScore = int(curScoreFloat + 0.5)
 	}
 
-	w.Write([]byte("Synced successfully"))
+	// Detect notification events
+	fullRepoName := fmt.Sprintf("%s/%s", owner, repo)
+	events := notifications.DetectEvents(fullRepoName, newCommits, currentScore, previousScore)
+
+	message := "Synced successfully"
+	if newCommits > 0 {
+		message = fmt.Sprintf("%d new commit(s) detected", newCommits)
+	}
+
+	// Return structured JSON response
+	result := notifications.SyncResult{
+		Message:      message,
+		NewCommits:   newCommits,
+		UpdatedFiles: updatedFiles,
+		Activity: notifications.ActivityInfo{
+			CurrentScore:  currentScore,
+			PreviousScore: previousScore,
+			State:         notifications.GetActivityState(currentScore),
+		},
+		Notifications: events,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
 
 // ----------------------------
